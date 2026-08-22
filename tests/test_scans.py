@@ -12,13 +12,23 @@ from PIL import Image, ImageDraw, ImageFilter
 from app.api.routes.scans import get_scan_service
 from app.core.config import Settings
 from app.main import app
+from app.services.ocr import OcrService, RawOcrDetection
 from app.services.scans import ScanService, generate_scan_id
+
+
+class StubOcrEngine:
+    """Model-free OCR boundary for scan API tests."""
+
+    def extract(self, image_path: Path) -> list[RawOcrDetection]:
+        return [RawOcrDetection("MRP Rs. 99", 0.94, (20, 30, 180, 60))]
 
 
 @pytest.fixture(autouse=True)
 def scan_storage(tmp_path: Path) -> Path:
     """Use isolated local storage for every scan test."""
-    app.dependency_overrides[get_scan_service] = lambda: ScanService(Settings(storage_dir=tmp_path))
+    app.dependency_overrides[get_scan_service] = lambda: ScanService(
+        Settings(storage_dir=tmp_path), ocr_service=OcrService(engine=StubOcrEngine())
+    )
     yield tmp_path
     app.dependency_overrides.clear()
 
@@ -42,6 +52,19 @@ def make_image_bytes(
     if blur_radius:
         image = image.filter(ImageFilter.GaussianBlur(blur_radius))
     image.convert("RGB").save(output, format=image_format)
+    return output.getvalue()
+
+
+def make_package_label_image_bytes() -> bytes:
+    """Create a synthetic package-style label without relying on a real product image."""
+    output = BytesIO()
+    image = Image.new("RGB", (640, 480), color="white")
+    drawing = ImageDraw.Draw(image)
+    for index, line in enumerate(
+        ["Manufacturer: Example Co.", "Net Quantity: 500 g", "MRP Rs. 99", "Consumer care: 1800-000-000"]
+    ):
+        drawing.text((30, 40 + index * 80), line, fill="black")
+    image.save(output, format="PNG")
     return output.getvalue()
 
 
@@ -119,7 +142,28 @@ def test_scan_response_has_required_structure() -> None:
         "height",
         "created_at",
         "quality",
+        "ocr",
     }
+
+
+def test_scan_response_includes_structured_ocr_evidence() -> None:
+    """The API exposes evidence tied to the processed derivative, not a legal decision."""
+    response = post_scan("label.png", make_package_label_image_bytes(), "image/png")
+
+    ocr = response.json()["ocr"]
+    assert ocr["status"] == "completed"
+    assert ocr["source_image_id"].endswith(":processed")
+    assert ocr["items"] == [
+        {
+            "text": "MRP Rs. 99",
+            "confidence": 0.94,
+            "bbox": [20.0, 30.0, 180.0, 60.0],
+            "engine": "paddleocr",
+            "source": "processed",
+            "source_image_id": ocr["source_image_id"],
+            "extraction_method": "paddleocr_pp_ocr",
+        }
+    ]
 
 
 def test_sharp_adequately_exposed_image_passes_quality_assessment() -> None:

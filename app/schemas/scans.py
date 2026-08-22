@@ -2,8 +2,9 @@
 
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 
 class ScanStatus(str, Enum):
@@ -70,6 +71,45 @@ class ImageQualityAssessment(BaseModel):
     messages: list[str]
 
 
+class OcrStatus(str, Enum):
+    """Outcome of an OCR attempt on a processed scan derivative."""
+
+    COMPLETED = "completed"
+    NO_TEXT = "no_text"
+    FAILED = "failed"
+
+
+class OCRTextEvidence(BaseModel):
+    """One OCR finding measured against the processed derivative image."""
+
+    text: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    bbox: tuple[float, float, float, float]
+    engine: Literal["paddleocr"]
+    source: Literal["processed"]
+    source_image_id: str
+    extraction_method: Literal["paddleocr_pp_ocr"]
+
+    @model_validator(mode="after")
+    def validate_bbox(self) -> "OCRTextEvidence":
+        """Require an axis-aligned left, top, right, bottom bounding box."""
+        left, top, right, bottom = self.bbox
+        if right <= left or bottom <= top:
+            raise ValueError("bbox must be [left, top, right, bottom] with positive area")
+        return self
+
+
+class OCRResult(BaseModel):
+    """Structured evidence from OCR without any compliance interpretation."""
+
+    status: OcrStatus
+    items: list[OCRTextEvidence]
+    source_image_id: str
+    source_width: int
+    source_height: int
+    error: str | None = None
+
+
 class ScanCreateResponse(BaseModel):
     """Public metadata returned after a package image is ingested."""
 
@@ -82,3 +122,4 @@ class ScanCreateResponse(BaseModel):
     height: int
     created_at: datetime
     quality: ImageQualityAssessment
+    ocr: OCRResult

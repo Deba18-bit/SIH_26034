@@ -11,9 +11,10 @@ from fastapi import UploadFile
 from PIL import Image, UnidentifiedImageError
 
 from app.core.config import Settings
-from app.schemas.scans import ImageQualityAssessment, ScanCreateResponse, ScanStatus
+from app.schemas.scans import ScanCreateResponse, ScanStatus
 from app.services.image_preprocessing import ImagePreprocessingService, ProcessedImage
 from app.services.image_quality import ImageQualityService
+from app.services.ocr import OcrService
 
 ALLOWED_IMAGE_FORMATS = {
     "image/jpeg": ("JPEG", ".jpg"),
@@ -59,10 +60,11 @@ def generate_scan_id() -> str:
 class ScanService:
     """Create scans by validating and storing original image uploads."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, ocr_service: OcrService | None = None) -> None:
         self._settings = settings
         self._quality_service = ImageQualityService(settings)
         self._preprocessing_service = ImagePreprocessingService(settings)
+        self._ocr_service = ocr_service or OcrService()
 
     async def create_scan(self, image: UploadFile) -> ScanCreateResponse:
         """Validate, persist, and describe one uploaded package image."""
@@ -74,10 +76,16 @@ class ScanService:
                 validated_image.content, validated_image.width, validated_image.height
             )
             processed_image = self._preprocessing_service.preprocess(validated_image.content)
-            self._store_processed(scan_id, processed_image)
+            processed_image_path = self._store_processed(scan_id, processed_image)
         except (cv2.error, OSError, ValueError) as error:
             raise ImageProcessingError() from error
         created_at = datetime.now(timezone.utc)
+        ocr = self._ocr_service.extract(
+            processed_image_path=processed_image_path,
+            source_image_id=f"scan:{scan_id}:processed",
+            source_width=processed_image.width,
+            source_height=processed_image.height,
+        )
 
         return ScanCreateResponse(
             scan_id=scan_id,
@@ -89,6 +97,7 @@ class ScanService:
             height=validated_image.height,
             created_at=created_at,
             quality=quality,
+            ocr=ocr,
         )
 
     async def _validate_image(self, image: UploadFile) -> ValidatedImage:
@@ -169,12 +178,11 @@ class ScanService:
             self._settings.storage_dir / "scans" / f"{scan_id}{image.suffix}", image.content
         )
 
-    def _store_processed(self, scan_id: str, image: ProcessedImage) -> None:
+    def _store_processed(self, scan_id: str, image: ProcessedImage) -> Path:
         """Store the derivative alongside, but separately from, its original image."""
-        self._write_bytes_atomically(
-            self._settings.storage_dir / "scans" / "processed" / f"{scan_id}.png",
-            image.content,
-        )
+        destination = self._settings.storage_dir / "scans" / "processed" / f"{scan_id}.png"
+        self._write_bytes_atomically(destination, image.content)
+        return destination
 
     @staticmethod
     def _write_bytes_atomically(destination: Path, content: bytes) -> None:

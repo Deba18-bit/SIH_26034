@@ -4,13 +4,13 @@ FastAPI backend foundation for the AI-powered Legal Metrology compliance system.
 
 ## Prerequisites
 
-- Python 3.11 or later
+- Python 3.11–3.13 (PaddlePaddle does not currently provide a Python 3.14 wheel)
 
 ## Run locally
 
 ```sh
-python3 -m venv .venv
-source .venv/bin/activate
+python3.13 -m venv .venv-ocr
+source .venv-ocr/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 uvicorn app.main:app --reload
@@ -42,6 +42,18 @@ the location and validation thresholds with `SIH_STORAGE_DIR`,
 `SIH_MAX_UPLOAD_SIZE_BYTES`, `SIH_MIN_IMAGE_WIDTH`, and `SIH_MIN_IMAGE_HEIGHT`.
 Quality thresholds can be configured with `SIH_MIN_SHARPNESS_VARIANCE`,
 `SIH_MIN_BRIGHTNESS`, `SIH_MAX_BRIGHTNESS`, and `SIH_PREPROCESSING_DENOISE`.
+
+## OCR evidence
+
+The backend uses CPU PaddleOCR on the processed grayscale derivative only. The
+original upload remains unchanged. `POST /api/scans` includes `ocr.items`; each
+item has text, confidence (0–1), `engine`, source metadata, and a bounding box
+in `[left, top, right, bottom]` pixel coordinates relative to that exact
+processed derivative. Low-confidence text is preserved. `ocr.status` is
+`completed`, `no_text`, or `failed`; OCR evidence is not a compliance decision.
+
+PaddleOCR models download when the first real OCR request is made. Unit tests use
+a fake OCR engine and do not download models.
 
 ## Configuration
 
