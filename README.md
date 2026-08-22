@@ -26,7 +26,11 @@ curl http://127.0.0.1:8000/api/health
 
 The current ingestion endpoint accepts JPEG, PNG, and WebP images up to 10 MiB.
 It validates that the file can be decoded and is at least 320×240 pixels; it does
-not perform OCR or compliance checks.
+not perform OCR or compliance checks. It also returns an engineering quality
+assessment based on dimensions, sharpness, brightness, and OpenCV readability.
+An image that needs recapture is marked `MANUAL_REVIEW_REQUIRED`; this is not a
+legal determination. A normalized grayscale PNG derivative is retained for the
+future OCR stage while the original upload remains unchanged.
 
 ```sh
 curl -X POST http://127.0.0.1:8000/api/scans \
@@ -36,6 +40,8 @@ curl -X POST http://127.0.0.1:8000/api/scans \
 Original uploads are stored locally in `data/scans/` during development. Configure
 the location and validation thresholds with `SIH_STORAGE_DIR`,
 `SIH_MAX_UPLOAD_SIZE_BYTES`, `SIH_MIN_IMAGE_WIDTH`, and `SIH_MIN_IMAGE_HEIGHT`.
+Quality thresholds can be configured with `SIH_MIN_SHARPNESS_VARIANCE`,
+`SIH_MIN_BRIGHTNESS`, `SIH_MAX_BRIGHTNESS`, and `SIH_PREPROCESSING_DENOISE`.
 
 ## Configuration
 

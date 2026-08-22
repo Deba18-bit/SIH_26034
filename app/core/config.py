@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     max_upload_size_bytes: int = 10 * 1024 * 1024
     min_image_width: int = 320
     min_image_height: int = 240
+    min_sharpness_variance: float = 100.0
+    min_brightness: float = 40.0
+    max_brightness: float = 215.0
+    preprocessing_contrast_clip_limit: float = 2.0
+    preprocessing_denoise: bool = False
 
     model_config = SettingsConfigDict(env_prefix="SIH_", case_sensitive=False)
 

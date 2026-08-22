@@ -7,7 +7,7 @@ from uuid import UUID
 
 import httpx
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFilter
 
 from app.api.routes.scans import get_scan_service
 from app.core.config import Settings
@@ -24,11 +24,24 @@ def scan_storage(tmp_path: Path) -> Path:
 
 
 def make_image_bytes(
-    image_format: str = "PNG", size: tuple[int, int] = (640, 480)
+    image_format: str = "PNG",
+    size: tuple[int, int] = (640, 480),
+    brightness: int = 128,
+    blur_radius: float = 0,
+    include_edges: bool = True,
 ) -> bytes:
-    """Create a valid in-memory image fixture."""
+    """Create a deterministic image fixture with edges for quality tests."""
     output = BytesIO()
-    Image.new("RGB", size, color="white").save(output, format=image_format)
+    image = Image.new("L", size, color=brightness)
+    drawing = ImageDraw.Draw(image)
+    if include_edges:
+        for x_coordinate in range(0, size[0], 32):
+            drawing.line((x_coordinate, 0, x_coordinate, size[1]), fill=0, width=4)
+        for y_coordinate in range(0, size[1], 32):
+            drawing.line((0, y_coordinate, size[0], y_coordinate), fill=0, width=4)
+    if blur_radius:
+        image = image.filter(ImageFilter.GaussianBlur(blur_radius))
+    image.convert("RGB").save(output, format=image_format)
     return output.getvalue()
 
 
@@ -58,6 +71,7 @@ def test_valid_image_upload_returns_created_metadata(scan_storage: Path) -> None
     assert body["height"] == 480
     assert body["file_size"] > 0
     assert (scan_storage / "scans" / f"{body['scan_id']}.png").is_file()
+    assert (scan_storage / "scans" / "processed" / f"{body['scan_id']}.png").is_file()
 
 
 def test_unsupported_file_type_is_rejected() -> None:
@@ -104,4 +118,58 @@ def test_scan_response_has_required_structure() -> None:
         "width",
         "height",
         "created_at",
+        "quality",
     }
+
+
+def test_sharp_adequately_exposed_image_passes_quality_assessment() -> None:
+    """A detailed, normally exposed image passes every engineering check."""
+    response = post_scan("sharp.png", make_image_bytes(), "image/png")
+
+    quality = response.json()["quality"]
+    assert response.status_code == 201
+    assert quality["status"] == "PASS"
+    assert all(check["passed"] for check in quality["checks"].values())
+
+
+def test_obviously_blurry_image_requires_manual_review() -> None:
+    """A strongly blurred image exposes a failed sharpness measurement."""
+    response = post_scan("blurry.png", make_image_bytes(blur_radius=12), "image/png")
+
+    quality = response.json()["quality"]
+    assert quality["status"] == "MANUAL_REVIEW_REQUIRED"
+    assert quality["checks"]["sharpness"]["passed"] is False
+
+
+def test_dark_image_requires_manual_review() -> None:
+    """An underexposed image exposes a failed brightness measurement."""
+    response = post_scan(
+        "dark.png", make_image_bytes(brightness=10, include_edges=False), "image/png"
+    )
+
+    quality = response.json()["quality"]
+    assert quality["status"] == "MANUAL_REVIEW_REQUIRED"
+    assert quality["checks"]["brightness"]["passed"] is False
+
+
+def test_bright_image_requires_manual_review() -> None:
+    """An overexposed image exposes a failed brightness measurement."""
+    response = post_scan(
+        "bright.png", make_image_bytes(brightness=245, include_edges=False), "image/png"
+    )
+
+    quality = response.json()["quality"]
+    assert quality["status"] == "MANUAL_REVIEW_REQUIRED"
+    assert quality["checks"]["brightness"]["passed"] is False
+
+
+def test_processed_derivative_does_not_modify_original(scan_storage: Path) -> None:
+    """The OCR derivative is separate and leaves original evidence bytes intact."""
+    original_content = make_image_bytes()
+    response = post_scan("package.png", original_content, "image/png")
+
+    scan_id = response.json()["scan_id"]
+    original_path = scan_storage / "scans" / f"{scan_id}.png"
+    processed_path = scan_storage / "scans" / "processed" / f"{scan_id}.png"
+    assert original_path.read_bytes() == original_content
+    assert processed_path.is_file()

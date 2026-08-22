@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
 from app.core.config import get_settings
 from app.schemas.scans import ScanCreateResponse
-from app.services.scans import ImageValidationError, ScanService
+from app.services.scans import ImageProcessingError, ImageValidationError, ScanService
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -28,4 +28,9 @@ async def create_scan(
         raise HTTPException(
             status_code=error.status_code,
             detail={"code": error.code, "message": error.message},
+        ) from error
+    except ImageProcessingError as error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "image_processing_failed", "message": error.message},
         ) from error

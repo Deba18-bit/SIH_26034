@@ -6,11 +6,14 @@ from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
+import cv2
 from fastapi import UploadFile
 from PIL import Image, UnidentifiedImageError
 
 from app.core.config import Settings
-from app.schemas.scans import ScanCreateResponse, ScanStatus
+from app.schemas.scans import ImageQualityAssessment, ScanCreateResponse, ScanStatus
+from app.services.image_preprocessing import ImagePreprocessingService, ProcessedImage
+from app.services.image_quality import ImageQualityService
 
 ALLOWED_IMAGE_FORMATS = {
     "image/jpeg": ("JPEG", ".jpg"),
@@ -26,6 +29,13 @@ class ImageValidationError(Exception):
     status_code: int
     code: str
     message: str
+
+
+@dataclass(frozen=True)
+class ImageProcessingError(Exception):
+    """A processing failure that must not expose internal implementation details."""
+
+    message: str = "The image could not be prepared for downstream processing."
 
 
 @dataclass(frozen=True)
@@ -51,12 +61,22 @@ class ScanService:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._quality_service = ImageQualityService(settings)
+        self._preprocessing_service = ImagePreprocessingService(settings)
 
     async def create_scan(self, image: UploadFile) -> ScanCreateResponse:
         """Validate, persist, and describe one uploaded package image."""
         validated_image = await self._validate_image(image)
         scan_id = generate_scan_id()
-        self._store_original(scan_id, validated_image)
+        try:
+            self._store_original(scan_id, validated_image)
+            quality = self._quality_service.assess(
+                validated_image.content, validated_image.width, validated_image.height
+            )
+            processed_image = self._preprocessing_service.preprocess(validated_image.content)
+            self._store_processed(scan_id, processed_image)
+        except (cv2.error, OSError, ValueError) as error:
+            raise ImageProcessingError() from error
         created_at = datetime.now(timezone.utc)
 
         return ScanCreateResponse(
@@ -68,6 +88,7 @@ class ScanService:
             width=validated_image.width,
             height=validated_image.height,
             created_at=created_at,
+            quality=quality,
         )
 
     async def _validate_image(self, image: UploadFile) -> ValidatedImage:
@@ -144,6 +165,25 @@ class ScanService:
 
     def _store_original(self, scan_id: str, image: ValidatedImage) -> None:
         """Store a validated original using an opaque server-generated filename."""
-        storage_directory = self._settings.storage_dir / "scans"
-        storage_directory.mkdir(parents=True, exist_ok=True)
-        (storage_directory / f"{scan_id}{image.suffix}").write_bytes(image.content)
+        self._write_bytes_atomically(
+            self._settings.storage_dir / "scans" / f"{scan_id}{image.suffix}", image.content
+        )
+
+    def _store_processed(self, scan_id: str, image: ProcessedImage) -> None:
+        """Store the derivative alongside, but separately from, its original image."""
+        self._write_bytes_atomically(
+            self._settings.storage_dir / "scans" / "processed" / f"{scan_id}.png",
+            image.content,
+        )
+
+    @staticmethod
+    def _write_bytes_atomically(destination: Path, content: bytes) -> None:
+        """Write a derivative or original without leaving partially written output."""
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary_destination = destination.with_name(f".{destination.name}.tmp")
+        try:
+            temporary_destination.write_bytes(content)
+            temporary_destination.replace(destination)
+        finally:
+            if temporary_destination.exists():
+                temporary_destination.unlink()
