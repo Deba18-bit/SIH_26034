@@ -143,6 +143,7 @@ def test_scan_response_has_required_structure() -> None:
         "created_at",
         "quality",
         "ocr",
+        "extraction",
     }
 
 

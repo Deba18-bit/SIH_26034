@@ -75,6 +75,7 @@ class OcrStatus(str, Enum):
     """Outcome of an OCR attempt on a processed scan derivative."""
 
     COMPLETED = "completed"
+    MANUAL_REVIEW_REQUIRED = "manual_review_required"
     NO_TEXT = "no_text"
     FAILED = "failed"
 
@@ -110,6 +111,31 @@ class OCRResult(BaseModel):
     error: str | None = None
 
 
+class ExtractionStatus(str, Enum):
+    """Outcome of the structured extraction process."""
+
+    COMPLETED = "completed"
+    MANUAL_REVIEW_REQUIRED = "manual_review_required"
+    FAILED = "failed"
+
+
+class ExtractedField(BaseModel):
+    """A single structured fact extracted from OCR evidence."""
+
+    field_name: str
+    value: float | str
+    unit: str | None = None
+    confidence: float
+    source_evidence: OCRTextEvidence
+
+
+class ExtractionResult(BaseModel):
+    """The complete set of facts extracted from a scan."""
+
+    status: ExtractionStatus
+    fields: list[ExtractedField]
+
+
 class ScanCreateResponse(BaseModel):
     """Public metadata returned after a package image is ingested."""
 
@@ -123,3 +149,4 @@ class ScanCreateResponse(BaseModel):
     created_at: datetime
     quality: ImageQualityAssessment
     ocr: OCRResult
+    extraction: ExtractionResult

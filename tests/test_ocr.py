@@ -91,7 +91,7 @@ def test_low_confidence_ocr_result_is_preserved() -> None:
     """Low-confidence evidence remains available for later manual review."""
     result = extract_with(StaticOcrEngine([RawOcrDetection("Consumer care", 0.08, (1, 2, 70, 20))]))
 
-    assert result.status is OcrStatus.COMPLETED
+    assert result.status is OcrStatus.MANUAL_REVIEW_REQUIRED
     assert result.items[0].confidence == 0.08
 
 

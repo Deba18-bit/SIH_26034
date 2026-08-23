@@ -121,8 +121,15 @@ class OcrService:
                 error="OCR extraction could not be completed.",
             )
 
+        if not items:
+            status = OcrStatus.NO_TEXT
+        elif any(item.confidence < 0.60 for item in items):
+            status = OcrStatus.MANUAL_REVIEW_REQUIRED
+        else:
+            status = OcrStatus.COMPLETED
+
         return OCRResult(
-            status=OcrStatus.COMPLETED if items else OcrStatus.NO_TEXT,
+            status=status,
             items=items,
             source_image_id=source_image_id,
             source_width=source_width,
