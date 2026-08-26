@@ -136,6 +136,32 @@ class ExtractionResult(BaseModel):
     fields: list[ExtractedField]
 
 
+class ComplianceStatus(str, Enum):
+    """Overall or rule-specific compliance outcome."""
+
+    COMPLIANT = "compliant"
+    VIOLATION = "violation"
+    MANUAL_REVIEW_REQUIRED = "manual_review_required"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class ComplianceFinding(BaseModel):
+    """Outcome of a single deterministic rule evaluation."""
+
+    rule_id: str
+    status: ComplianceStatus
+    message: str
+    legal_reference: str
+    evidence: list[ExtractedField]
+
+
+class ComplianceResult(BaseModel):
+    """The complete set of compliance findings for a scan."""
+
+    status: ComplianceStatus
+    findings: list[ComplianceFinding]
+
+
 class ScanCreateResponse(BaseModel):
     """Public metadata returned after a package image is ingested."""
 
@@ -150,3 +176,4 @@ class ScanCreateResponse(BaseModel):
     quality: ImageQualityAssessment
     ocr: OCRResult
     extraction: ExtractionResult
+    compliance: ComplianceResult

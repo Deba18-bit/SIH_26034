@@ -16,6 +16,7 @@ from app.services.image_preprocessing import ImagePreprocessingService, Processe
 from app.services.image_quality import ImageQualityService
 from app.services.ocr import OcrService
 from app.services.extraction import ExtractionService
+from app.services.compliance import ComplianceService
 
 ALLOWED_IMAGE_FORMATS = {
     "image/jpeg": ("JPEG", ".jpg"),
@@ -61,12 +62,19 @@ def generate_scan_id() -> str:
 class ScanService:
     """Create scans by validating and storing original image uploads."""
 
-    def __init__(self, settings: Settings, ocr_service: OcrService | None = None, extraction_service: ExtractionService | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        ocr_service: OcrService | None = None,
+        extraction_service: ExtractionService | None = None,
+        compliance_service: ComplianceService | None = None
+    ) -> None:
         self._settings = settings
         self._quality_service = ImageQualityService(settings)
         self._preprocessing_service = ImagePreprocessingService(settings)
         self._ocr_service = ocr_service or OcrService()
         self._extraction_service = extraction_service or ExtractionService()
+        self._compliance_service = compliance_service or ComplianceService()
 
     async def create_scan(self, image: UploadFile) -> ScanCreateResponse:
         """Validate, persist, and describe one uploaded package image."""
@@ -89,6 +97,7 @@ class ScanService:
             source_height=processed_image.height,
         )
         extraction = self._extraction_service.extract(ocr)
+        compliance = self._compliance_service.evaluate(extraction)
 
         return ScanCreateResponse(
             scan_id=scan_id,
@@ -102,6 +111,7 @@ class ScanService:
             quality=quality,
             ocr=ocr,
             extraction=extraction,
+            compliance=compliance,
         )
 
     async def _validate_image(self, image: UploadFile) -> ValidatedImage:

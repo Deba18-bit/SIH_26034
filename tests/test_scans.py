@@ -144,6 +144,7 @@ def test_scan_response_has_required_structure() -> None:
         "quality",
         "ocr",
         "extraction",
+        "compliance",
     }
 
 
