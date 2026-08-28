@@ -87,12 +87,16 @@ def test_empty_ocr_result_is_preserved() -> None:
     assert result.error is None
 
 
-def test_low_confidence_ocr_result_is_preserved() -> None:
-    """Low-confidence evidence remains available for later manual review."""
-    result = extract_with(StaticOcrEngine([RawOcrDetection("Consumer care", 0.08, (1, 2, 70, 20))]))
+def test_low_confidence_ocr_result_is_preserved_without_poisoning() -> None:
+    """Low-confidence evidence remains available but does not globally poison the OCR status."""
+    result = extract_with(StaticOcrEngine([
+        RawOcrDetection("Consumer care", 0.08, (1, 2, 70, 20)),
+        RawOcrDetection("MRP Rs. 150.00", 0.95, (1, 30, 70, 50))
+    ]))
 
-    assert result.status is OcrStatus.MANUAL_REVIEW_REQUIRED
+    assert result.status is OcrStatus.COMPLETED
     assert result.items[0].confidence == 0.08
+    assert result.items[1].confidence == 0.95
 
 
 def test_ocr_failure_returns_structured_failure_state() -> None:

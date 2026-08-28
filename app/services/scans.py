@@ -16,6 +16,7 @@ from app.services.image_preprocessing import ImagePreprocessingService, Processe
 from app.services.image_quality import ImageQualityService
 from app.services.ocr import OcrService
 from app.services.extraction import ExtractionService
+from app.services.ai_extraction import AiExtractionService
 from app.services.compliance import ComplianceService
 
 ALLOWED_IMAGE_FORMATS = {
@@ -67,6 +68,7 @@ class ScanService:
         settings: Settings,
         ocr_service: OcrService | None = None,
         extraction_service: ExtractionService | None = None,
+        ai_extraction_service: AiExtractionService | None = None,
         compliance_service: ComplianceService | None = None
     ) -> None:
         self._settings = settings
@@ -74,6 +76,15 @@ class ScanService:
         self._preprocessing_service = ImagePreprocessingService(settings)
         self._ocr_service = ocr_service or OcrService()
         self._extraction_service = extraction_service or ExtractionService()
+        if ai_extraction_service is None:
+            if settings.gemini_api_key:
+                from app.services.ai_extraction import GeminiAiProvider
+                provider = GeminiAiProvider(api_key=settings.gemini_api_key)
+                self._ai_extraction_service = AiExtractionService(provider=provider)
+            else:
+                self._ai_extraction_service = AiExtractionService()
+        else:
+            self._ai_extraction_service = ai_extraction_service
         self._compliance_service = compliance_service or ComplianceService()
 
     async def create_scan(self, image: UploadFile) -> ScanCreateResponse:
@@ -97,6 +108,7 @@ class ScanService:
             source_height=processed_image.height,
         )
         extraction = self._extraction_service.extract(ocr)
+        extraction = await self._ai_extraction_service.enrich(ocr, extraction)
         compliance = self._compliance_service.evaluate(extraction)
 
         return ScanCreateResponse(

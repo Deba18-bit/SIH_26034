@@ -186,3 +186,56 @@ def test_integration_ocr_to_compliance():
     
     net_qty_finding = next(f for f in compliance.findings if f.rule_id == "LMPC-6-1-c")
     assert net_qty_finding.status == ComplianceStatus.MANUAL_REVIEW_REQUIRED
+
+def test_low_confidence_mrp_triggers_only_mrp_manual_review():
+    service = ComplianceService()
+    mrp_field = make_evidence("mrp", 150.0)
+    mrp_field.confidence = 0.45  # Low confidence
+    
+    extraction = ExtractionResult(
+        status=ExtractionStatus.COMPLETED,
+        fields=[
+            mrp_field,
+            make_evidence("net_quantity", 500.0),
+            make_evidence("consumer_care_phone", "1800-123-456"),
+            make_evidence("manufacturing_date", "12/2023")
+        ]
+    )
+    result = service.evaluate(extraction)
+    
+    assert result.status == ComplianceStatus.MANUAL_REVIEW_REQUIRED
+    
+    mrp_finding = next(f for f in result.findings if f.rule_id == "LMPC-6-1-e")
+    assert mrp_finding.status == ComplianceStatus.MANUAL_REVIEW_REQUIRED
+    
+    net_qty_finding = next(f for f in result.findings if f.rule_id == "LMPC-6-1-c")
+    assert net_qty_finding.status == ComplianceStatus.COMPLIANT
+
+def test_high_confidence_evidence_remains_compliant_when_another_is_low():
+    service = ComplianceService()
+    date_field = make_evidence("manufacturing_date", "12/2023")
+    date_field.confidence = 0.40  # Low confidence
+    
+    extraction = ExtractionResult(
+        status=ExtractionStatus.COMPLETED,
+        fields=[
+            make_evidence("mrp", 150.0),
+            make_evidence("net_quantity", 500.0),
+            make_evidence("consumer_care_phone", "1800-123-456"),
+            date_field
+        ]
+    )
+    result = service.evaluate(extraction)
+    
+    # Overall status should still be manual review because one rule failed (date)
+    assert result.status == ComplianceStatus.MANUAL_REVIEW_REQUIRED
+    
+    date_finding = next(f for f in result.findings if f.rule_id == "LMPC-6-1-d")
+    assert date_finding.status == ComplianceStatus.MANUAL_REVIEW_REQUIRED
+    
+    mrp_finding = next(f for f in result.findings if f.rule_id == "LMPC-6-1-e")
+    assert mrp_finding.status == ComplianceStatus.COMPLIANT
+    
+    net_qty_finding = next(f for f in result.findings if f.rule_id == "LMPC-6-1-c")
+    assert net_qty_finding.status == ComplianceStatus.COMPLIANT
+

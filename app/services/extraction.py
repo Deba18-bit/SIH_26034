@@ -15,21 +15,21 @@ class ExtractionService:
 
     def __init__(self) -> None:
         self._patterns = {
-            "mrp": re.compile(r"MRP\s*(?:Rs\.?|₹)?\s*(\d+(?:\.\d{1,2})?)", re.IGNORECASE),
+            "mrp": re.compile(r"MRP\s*:?\s*(?:Rs\.?|₹)?\s*(\d+(?:\.\d{1,2})?)", re.IGNORECASE),
             "net_quantity": re.compile(
-                r"(?:Net\s*(?:Quantity|Qty|Wt|Weight|Vol)|Weight|Vol)\s*:?\s*(\d+(?:\.\d+)?)\s*(g|kg|ml|l|oz)",
+                r"(?:Net\s*(?:Quantity|Qty|Wt|Weight|Vol)|Weight|Vol|Quantity|Qty)\s*:?\s*(\d+(?:\.\d+)?)\s*(g|kg|ml|l|oz)",
                 re.IGNORECASE,
             ),
             "consumer_care_phone": re.compile(
-                r"(?:Consumer\s*Care|Customer\s*Care|Toll\s*Free|Phone)\s*:?\s*(\d{4}[\-\s]?\d{3}[\-\s]?\d{3,4}|\d{10})",
+                r"(?:Consumer\s*Care|Customer\s*Care|CR\s*Details|Toll\s*Free|Phone)\s*(?::\s*Call|:|Call)?\s*(\d{4}[\-\s]?\d{3}[\-\s]?\d{3,4}|\d{10})",
                 re.IGNORECASE,
             ),
             "manufacturing_date": re.compile(
-                r"(?:Mfg|Mfd)\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}[/-]\d{2,4})",
+                r"(?:Mfg|Mfd)\s*:?\s*(\d{1,2}[/\-\s]+(?:[a-zA-Z]{3,}|[0-9]{1,2})[/\-\s]+\d{2,4}|\d{1,2}[/\-\s]+\d{2,4})",
                 re.IGNORECASE,
             ),
             "packing_date": re.compile(
-                r"(?:Packed|Pkd)\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}[/-]\d{2,4})",
+                r"(?:Packed|Pkd)\s*:?\s*(\d{1,2}[/\-\s]+(?:[a-zA-Z]{3,}|[0-9]{1,2})[/\-\s]+\d{2,4}|\d{1,2}[/\-\s]+\d{2,4})",
                 re.IGNORECASE,
             ),
         }

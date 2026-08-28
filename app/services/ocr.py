@@ -123,8 +123,6 @@ class OcrService:
 
         if not items:
             status = OcrStatus.NO_TEXT
-        elif any(item.confidence < 0.60 for item in items):
-            status = OcrStatus.MANUAL_REVIEW_REQUIRED
         else:
             status = OcrStatus.COMPLETED
 

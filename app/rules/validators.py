@@ -37,7 +37,8 @@ class PresenceValidator:
         # Check if the field extraction itself is ambiguous (e.g. multiple distinct values)
         # We can see this if matching_fields > 1 and they don't have exactly the same value
         distinct_values = {f.value for f in matching_fields}
-        if len(distinct_values) > 1 or extraction.status == ExtractionStatus.MANUAL_REVIEW_REQUIRED:
+        is_low_confidence = any(f.confidence < 0.50 for f in matching_fields)
+        if len(distinct_values) > 1 or extraction.status == ExtractionStatus.MANUAL_REVIEW_REQUIRED or is_low_confidence:
             return ComplianceFinding(
                 rule_id=rule.rule_id,
                 status=ComplianceStatus.MANUAL_REVIEW_REQUIRED,
@@ -84,7 +85,8 @@ class EitherPresenceValidator:
             )
             
         # If extraction is flagged for manual review, propagate it.
-        if extraction.status == ExtractionStatus.MANUAL_REVIEW_REQUIRED:
+        is_low_confidence = any(f.confidence < 0.50 for f in matching_fields)
+        if extraction.status == ExtractionStatus.MANUAL_REVIEW_REQUIRED or is_low_confidence:
             return ComplianceFinding(
                 rule_id=rule.rule_id,
                 status=ComplianceStatus.MANUAL_REVIEW_REQUIRED,

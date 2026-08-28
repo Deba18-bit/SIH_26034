@@ -89,7 +89,7 @@ class OCRTextEvidence(BaseModel):
     engine: Literal["paddleocr"]
     source: Literal["processed"]
     source_image_id: str
-    extraction_method: Literal["paddleocr_pp_ocr"]
+    extraction_method: Literal["paddleocr_pp_ocr", "ai_fallback"]
 
     @model_validator(mode="after")
     def validate_bbox(self) -> "OCRTextEvidence":

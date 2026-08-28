@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     max_brightness: float = 215.0
     preprocessing_contrast_clip_limit: float = 2.0
     preprocessing_denoise: bool = False
+    gemini_api_key: str | None = None
 
     model_config = SettingsConfigDict(env_prefix="SIH_", case_sensitive=False)
 
