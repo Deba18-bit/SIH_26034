@@ -24,11 +24,13 @@ class OcrEngine(Protocol):
         """Extract text detections from one image path."""
 
 
+_GLOBAL_PADDLE_OCR = None
+
 class PaddleOcrEngine:
     """Lazy CPU PaddleOCR adapter for processed package images."""
 
     def __init__(self) -> None:
-        self._ocr: Any | None = None
+        pass
 
     def extract(self, image_path: Path) -> Iterable[RawOcrDetection]:
         """Run PaddleOCR and normalize its page-level output."""
@@ -37,16 +39,17 @@ class PaddleOcrEngine:
 
     def _get_ocr(self) -> Any:
         """Initialize PaddleOCR only when a real inference request arrives."""
-        if self._ocr is None:
+        global _GLOBAL_PADDLE_OCR
+        if _GLOBAL_PADDLE_OCR is None:
             from paddleocr import PaddleOCR
 
-            self._ocr = PaddleOCR(
+            _GLOBAL_PADDLE_OCR = PaddleOCR(
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
                 use_textline_orientation=False,
                 engine="paddle",
             )
-        return self._ocr
+        return _GLOBAL_PADDLE_OCR
 
     @staticmethod
     def _result_to_payload(page_result: Any) -> dict[str, Any]:

@@ -86,8 +86,8 @@ class OCRTextEvidence(BaseModel):
     text: str
     confidence: float = Field(ge=0.0, le=1.0)
     bbox: tuple[float, float, float, float]
-    engine: Literal["paddleocr"]
-    source: Literal["processed"]
+    engine: Literal["paddleocr", "gemini-3.1-flash-lite"]
+    source: Literal["processed", "vision"]
     source_image_id: str
     extraction_method: Literal["paddleocr_pp_ocr", "ai_fallback"]
 

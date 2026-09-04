@@ -20,7 +20,7 @@ class AiExtractionProvider(ABC):
     """Abstract interface for LLM calls."""
 
     @abstractmethod
-    async def extract_fields(self, prompt_data: dict[str, Any]) -> dict[str, Any]:
+    async def extract_fields(self, prompt_data: dict[str, Any], image_bytes: bytes | None = None) -> dict[str, Any]:
         """Send prompt data to the LLM and return structured JSON."""
         pass
 
@@ -31,7 +31,7 @@ class FakeAiProvider(AiExtractionProvider):
     def __init__(self, stub_response: dict[str, Any] | None = None) -> None:
         self.stub_response = stub_response or {"extracted_fields": []}
 
-    async def extract_fields(self, prompt_data: dict[str, Any]) -> dict[str, Any]:
+    async def extract_fields(self, prompt_data: dict[str, Any], image_bytes: bytes | None = None) -> dict[str, Any]:
         return self.stub_response
 
 
@@ -43,7 +43,8 @@ class GeminiAiProvider(AiExtractionProvider):
         field_name: str
         value: str | float
         unit: str | None = None
-        source_ocr_ids: list[int]
+        source_ocr_ids: list[int] | None = None
+        bbox_1000: list[int] | None = Field(default=None, description="[ymin, xmin, ymax, xmax] normalized to 1000")
         ai_semantic_confidence: float = Field(ge=0.0, le=1.0)
 
     class AiExtractionResponseModel(BaseModel):
@@ -55,22 +56,32 @@ class GeminiAiProvider(AiExtractionProvider):
             raise ValueError("Gemini API key is not set. Cannot use GeminiAiProvider.")
         self.client = genai.Client(api_key=key)
 
-    async def extract_fields(self, prompt_data: dict[str, Any]) -> dict[str, Any]:
+    async def extract_fields(self, prompt_data: dict[str, Any], image_bytes: bytes | None = None) -> dict[str, Any]:
         prompt = (
             "You are a specialized legal metrology AI extraction assistant.\n"
-            "Analyze the provided structured OCR text blocks and their bounding boxes to extract the missing required fields.\n"
+            "Analyze the provided structured OCR text blocks to extract the missing required fields.\n"
+            "If an image is provided, you may visually inspect it to find missing fields (like curved or glossy text that OCR missed).\n"
             "Rules:\n"
             "1. Do not invent or guess any values.\n"
-            "2. Map every extracted field exactly to the source_ocr_ids of the OCR blocks it came from.\n"
-            "3. ai_semantic_confidence should be between 0.0 and 1.0 based on how sure you are of the semantic meaning.\n\n"
+            "2. Map every extracted field to the source_ocr_ids if found in the text blocks.\n"
+            "3. If found purely from the image (OCR missed it), provide the bounding box in bbox_1000 format [ymin, xmin, ymax, xmax] (normalized 0-1000).\n"
+            "4. ai_semantic_confidence should be between 0.0 and 1.0 based on how sure you are of the semantic meaning.\n"
+            "Terminology:\n"
+            "- mrp: Maximum Retail Price (e.g. MRP: 450.00)\n"
+            "- net_quantity: Weight or Volume (e.g. 500g, 1L, Net Wt 924g)\n"
+            "- manufacturing_date: The date of manufacture (e.g. Mfg Date 16/05/2026)\n"
+            "- packing_date: The date of packaging (e.g. Pkd Date)\n"
+            "- consumer_care_phone: A customer support phone number (e.g. Consumer Care: 9821486487, Toll Free)\n\n"
             f"Input Data:\n{json.dumps(prompt_data, indent=2)}"
         )
         
-        import asyncio
-        response = await asyncio.to_thread(
-            self.client.models.generate_content,
-            model='gemini-3.6-flash',
-            contents=prompt,
+        contents: list[Any] = [prompt]
+        if image_bytes:
+            contents.append(genai.types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"))
+            
+        response = await self.client.aio.models.generate_content(
+            model='gemini-3.1-flash-lite',
+            contents=contents,
             config=genai.types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=self.AiExtractionResponseModel,
@@ -108,13 +119,11 @@ class AiExtractionService:
             
         return True, missing_fields
 
-    async def enrich(self, ocr: OCRResult, extraction: ExtractionResult) -> ExtractionResult:
+    async def enrich(self, ocr: OCRResult, extraction: ExtractionResult, image_bytes: bytes | None = None, source_width: int = 1000, source_height: int = 1000) -> ExtractionResult:
         """Call AI for missing fields and merge safely."""
         needs_fallback, missing_fields = self.should_fallback(extraction)
         
-        print('needs_fallback:', needs_fallback, 'missing_fields:', missing_fields, 'ocr.items:', len(ocr.items))
-        if not needs_fallback or not ocr.items:
-            print('Returning early from enrich')
+        if not needs_fallback:
             return extraction
             
         # 1. Prepare OCR items with IDs
@@ -135,18 +144,13 @@ class AiExtractionService:
         }
         
         # 2. Call AI
-        print('Calling AI...')
         try:
-            ai_response = await self._provider.extract_fields(prompt_data)
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            print('AI Failed!')
+            ai_response = await self._provider.extract_fields(prompt_data, image_bytes)
+        except Exception:
             # If AI crashes, safely return the deterministic result
             return extraction
             
         # 3. Merge AI fields
-        print('AI RESPONSE:', ai_response)
         new_fields = list(extraction.fields)
         found_deterministic = {f.field_name for f in extraction.fields}
         
@@ -155,37 +159,47 @@ class AiExtractionService:
             field_name = ai_field.get("field_name")
             value = ai_field.get("value")
             source_ids = ai_field.get("source_ocr_ids", [])
+            bbox_1000 = ai_field.get("bbox_1000")
             ai_confidence = ai_field.get("ai_semantic_confidence", 0.0)
             
             # Strict Priority: Never override a deterministic field
             if field_name in found_deterministic:
                 continue
                 
-            # Must have source evidence to be traceable
-            if not source_ids:
-                continue
-                
-            sources = [ocr_item_map[i] for i in source_ids if i in ocr_item_map]
-            if not sources:
-                continue
-                
             # Compute synthetic bounding box & confidence
-            min_x = min(s.bbox[0] for s in sources)
-            min_y = min(s.bbox[1] for s in sources)
-            max_x = max(s.bbox[2] for s in sources)
-            max_y = max(s.bbox[3] for s in sources)
-            
-            min_ocr_conf = min(s.confidence for s in sources)
-            final_confidence = min(ai_confidence, min_ocr_conf)
-            combined_text = " ".join(s.text for s in sources)
-            
+            if source_ids:
+                sources = [ocr_item_map[i] for i in source_ids if i in ocr_item_map]
+                if not sources:
+                    continue
+                min_x = min(s.bbox[0] for s in sources)
+                min_y = min(s.bbox[1] for s in sources)
+                max_x = max(s.bbox[2] for s in sources)
+                max_y = max(s.bbox[3] for s in sources)
+                min_ocr_conf = min(s.confidence for s in sources)
+                final_confidence = min(ai_confidence, min_ocr_conf)
+                engine = sources[0].engine
+                source = sources[0].source
+                evidence_text = " ".join(s.text for s in sources)
+            elif bbox_1000 and len(bbox_1000) == 4:
+                ymin, xmin, ymax, xmax = bbox_1000
+                min_x = (xmin / 1000.0) * source_width
+                min_y = (ymin / 1000.0) * source_height
+                max_x = (xmax / 1000.0) * source_width
+                max_y = (ymax / 1000.0) * source_height
+                final_confidence = ai_confidence * 0.9  # slight penalty for vision-only box
+                engine = "gemini-3.1-flash-lite"
+                source = "vision"
+                evidence_text = str(value)
+            else:
+                continue
+                
             synthetic_evidence = OCRTextEvidence(
-                text=combined_text,
+                text=evidence_text,
                 confidence=final_confidence,
                 bbox=(min_x, min_y, max_x, max_y),
-                engine=sources[0].engine,
-                source=sources[0].source,
-                source_image_id=sources[0].source_image_id,
+                engine=engine,
+                source=source,
+                source_image_id=ocr.source_image_id,
                 extraction_method="ai_fallback"
             )
             

@@ -34,6 +34,13 @@ class ImagePreprocessingService:
         if decoded_image is None:
             raise ValueError("OpenCV could not decode the image for preprocessing.")
 
+        max_dim = 768
+        h, w = decoded_image.shape[:2]
+        if max(h, w) > max_dim:
+            scale = max_dim / max(h, w)
+            new_w, new_h = int(w * scale), int(h * scale)
+            decoded_image = cv2.resize(decoded_image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
         grayscale = cv2.cvtColor(decoded_image, cv2.COLOR_BGR2GRAY)
         normalized = cv2.createCLAHE(
             clipLimit=self._settings.preprocessing_contrast_clip_limit,
