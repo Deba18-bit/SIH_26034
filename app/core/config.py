@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     preprocessing_contrast_clip_limit: float = 2.0
     preprocessing_denoise: bool = False
     gemini_api_key: str | None = None
+    database_url: str = "postgresql://localhost:5432/metri_check"
 
     model_config = SettingsConfigDict(env_prefix="SIH_", case_sensitive=False)
 

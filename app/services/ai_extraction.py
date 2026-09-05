@@ -14,6 +14,11 @@ from app.schemas.scans import (
     OCRResult,
     OCRTextEvidence,
 )
+from app.services.identification import (
+    IdentificationMethod,
+    IdentificationResult,
+    IdentificationStatus,
+)
 
 
 class AiExtractionProvider(ABC):
@@ -24,15 +29,40 @@ class AiExtractionProvider(ABC):
         """Send prompt data to the LLM and return structured JSON."""
         pass
 
+    @abstractmethod
+    async def identify_brand_and_product(
+        self, image_bytes: bytes, ocr_context: str | None = None
+    ) -> dict[str, Any]:
+        """Send package image to Gemini Vision to identify Brand, Product, and Manufacturer."""
+        pass
+
 
 class FakeAiProvider(AiExtractionProvider):
     """A dummy provider for unit tests."""
 
-    def __init__(self, stub_response: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        stub_response: dict[str, Any] | None = None,
+        stub_id_response: dict[str, Any] | None = None,
+    ) -> None:
         self.stub_response = stub_response or {"extracted_fields": []}
+        self.stub_id_response = stub_id_response or {
+            "brand_name": "NAKPRO",
+            "product_name": "Creatine Monohydrate",
+            "manufacturer_name": "Nakpro Nutrition Pvt Ltd",
+            "brand_confidence": 0.95,
+            "product_confidence": 0.95,
+            "manufacturer_confidence": 0.95,
+            "evidence": ["Visual inspection of package front and back"],
+        }
 
     async def extract_fields(self, prompt_data: dict[str, Any], image_bytes: bytes | None = None) -> dict[str, Any]:
         return self.stub_response
+
+    async def identify_brand_and_product(
+        self, image_bytes: bytes, ocr_context: str | None = None
+    ) -> dict[str, Any]:
+        return self.stub_id_response
 
 
 
@@ -50,6 +80,15 @@ class GeminiAiProvider(AiExtractionProvider):
     class AiExtractionResponseModel(BaseModel):
         extracted_fields: list["GeminiAiProvider.AiExtractedFieldModel"]
 
+    class AiBrandIdentificationResponseModel(BaseModel):
+        brand_name: str | None = None
+        product_name: str | None = None
+        manufacturer_name: str | None = None
+        brand_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+        product_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+        manufacturer_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+        evidence: list[str] = Field(default_factory=list)
+
     def __init__(self, api_key: str | None = None) -> None:
         key = api_key or os.environ.get("SIH_GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
         if not key:
@@ -66,9 +105,14 @@ class GeminiAiProvider(AiExtractionProvider):
             "2. Map every extracted field to the source_ocr_ids if found in the text blocks.\n"
             "3. If found purely from the image (OCR missed it), provide the bounding box in bbox_1000 format [ymin, xmin, ymax, xmax] (normalized 0-1000).\n"
             "4. ai_semantic_confidence should be between 0.0 and 1.0 based on how sure you are of the semantic meaning.\n"
+            "5. STRICT LEGAL METROLOGY CONSTRAINTS:\n"
+            "   - net_quantity: Must be the declared total net weight/volume of the packaged commodity (e.g. 'Net Qty: 500g', 'Net Weight: 1 kg', 'Net Vol: 250ml').\n"
+            "     NEVER extract values from 'Nutritional Information', 'Nutrition Facts', or 'Approximate Value' tables (e.g., '100g', 'per 100g', 'Protein 75g'). These are nutritional reference benchmarks, NOT the package net quantity!\n"
+            "     NEVER extract serving sizes (e.g., 'Serving Size: 4g').\n"
+            "     If the image only shows the back label with a nutrition table and lacks an explicit package net quantity declaration, DO NOT extract net_quantity. Leave it unextracted.\n"
             "Terminology:\n"
             "- mrp: Maximum Retail Price (e.g. MRP: 450.00)\n"
-            "- net_quantity: Weight or Volume (e.g. 500g, 1L, Net Wt 924g)\n"
+            "- net_quantity: Total Net Quantity of package only (e.g. 500g, 1kg, Net Wt 924g)\n"
             "- manufacturing_date: The date of manufacture (e.g. Mfg Date 16/05/2026)\n"
             "- packing_date: The date of packaging (e.g. Pkd Date)\n"
             "- consumer_care_phone: A customer support phone number (e.g. Consumer Care: 9821486487, Toll Free)\n\n"
@@ -91,6 +135,40 @@ class GeminiAiProvider(AiExtractionProvider):
         
         return json.loads(response.text)
 
+    async def identify_brand_and_product(
+        self, image_bytes: bytes, ocr_context: str | None = None
+    ) -> dict[str, Any]:
+        prompt = (
+            "You are an expert packaging and legal metrology visual inspection AI.\n"
+            "Analyze the provided packaged commodity image to identify:\n"
+            "1. brand_name: The prominent consumer-facing brand or brand logo (e.g., 'NAKPRO', 'AMUL', 'TATA', 'NESTLE').\n"
+            "2. product_name: The generic commodity or product name (e.g., 'Creatine Monohydrate', 'Whey Protein', 'Iodized Salt').\n"
+            "3. manufacturer_name: The legal corporate entity that manufactured, packed, or marketed the commodity (e.g., 'Nakpro Nutrition Pvt Ltd', 'Tata Consumer Products Ltd').\n\n"
+            "STRICT GUIDELINES:\n"
+            "- Do NOT confuse the manufacturer with the consumer brand! For example, if the manufacturer is 'ABC Nutrition Pvt Ltd' but the brand logo is 'XYZ', the brand is 'XYZ'.\n"
+            "- If a field is not visible or cannot be determined with confidence, return null. NEVER guess or hallucinate.\n"
+            "- Return confidence between 0.0 and 1.0 for each field.\n"
+            "- Return a list of concise evidence strings describing the visible text or visual logos used for identification.\n"
+        )
+        if ocr_context:
+            prompt += f"\nSupporting OCR text detected on package:\n{ocr_context[:2000]}\n"
+
+        contents = [
+            prompt,
+            genai.types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+        ]
+
+        response = await self.client.aio.models.generate_content(
+            model='gemini-3.1-flash-lite',
+            contents=contents,
+            config=genai.types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=self.AiBrandIdentificationResponseModel,
+                temperature=0.1,
+            ),
+        )
+        return json.loads(response.text)
+
 class AiExtractionService:
 
     """Manages fallback logic and safe merging of AI results."""
@@ -98,6 +176,52 @@ class AiExtractionService:
     def __init__(self, provider: AiExtractionProvider | None = None) -> None:
         self._provider = provider or FakeAiProvider()
         self._required_fields = {"mrp", "net_quantity", "consumer_care_phone"}
+        self.last_telemetry: dict[str, Any] = {
+            "triggered": False,
+            "reasons": [],
+            "raw_ai_fields": [],
+            "recovered_field_names": []
+        }
+
+    async def identify_package(
+        self, image_bytes: bytes, ocr_context: str | None = None
+    ) -> IdentificationResult:
+        """Use Gemini Vision to identify Brand, Product, and Manufacturer on demand."""
+        raw = await self._provider.identify_brand_and_product(image_bytes, ocr_context)
+        brand = raw.get("brand_name")
+        product = raw.get("product_name")
+        manufacturer = raw.get("manufacturer_name")
+        evidence = raw.get("evidence") or []
+
+        if brand and product:
+            status = IdentificationStatus.IDENTIFIED
+            conf = float(raw.get("brand_confidence") or 0.9)
+        elif brand or product or manufacturer:
+            status = IdentificationStatus.PARTIALLY_IDENTIFIED
+            conf = float(raw.get("brand_confidence") or raw.get("product_confidence") or 0.7)
+        else:
+            status = IdentificationStatus.UNIDENTIFIED
+            conf = 0.0
+
+        if not evidence:
+            evidence = ["AI visual inspection with Gemini Vision"]
+
+        return IdentificationResult(
+            brand_name=brand,
+            product_name=product,
+            manufacturer_name=manufacturer,
+            identification_status=status,
+            identification_method=IdentificationMethod.AI_ASSISTED,
+            confidence=conf,
+            identification_evidence=evidence,
+        )
+
+    def get_fallback_reasons(self, extraction: ExtractionResult) -> list[str]:
+        """Return human-readable reasons why fallback would be or was triggered."""
+        needs, missing = self.should_fallback(extraction)
+        if not needs:
+            return []
+        return [f"{f} missing after deterministic extraction" for f in sorted(missing)]
 
     def should_fallback(self, extraction: ExtractionResult) -> tuple[bool, set[str]]:
         """Determine if AI fallback is needed and which fields to find."""
@@ -122,8 +246,15 @@ class AiExtractionService:
     async def enrich(self, ocr: OCRResult, extraction: ExtractionResult, image_bytes: bytes | None = None, source_width: int = 1000, source_height: int = 1000) -> ExtractionResult:
         """Call AI for missing fields and merge safely."""
         needs_fallback, missing_fields = self.should_fallback(extraction)
+        reasons = [f"{f} missing after deterministic extraction" for f in sorted(missing_fields)]
         
         if not needs_fallback:
+            self.last_telemetry = {
+                "triggered": False,
+                "reasons": [],
+                "raw_ai_fields": [],
+                "recovered_field_names": []
+            }
             return extraction
             
         # 1. Prepare OCR items with IDs
@@ -147,14 +278,29 @@ class AiExtractionService:
         try:
             ai_response = await self._provider.extract_fields(prompt_data, image_bytes)
         except Exception:
+            self.last_telemetry = {
+                "triggered": True,
+                "reasons": reasons,
+                "raw_ai_fields": [],
+                "recovered_field_names": []
+            }
             # If AI crashes, safely return the deterministic result
             return extraction
             
         # 3. Merge AI fields
         new_fields = list(extraction.fields)
         found_deterministic = {f.field_name for f in extraction.fields}
+        source_width = ocr.source_width or 1000
+        source_height = ocr.source_height or 1000
         
         extracted_fields = ai_response.get("extracted_fields", [])
+        recovered_field_names: list[str] = []
+        self.last_telemetry = {
+            "triggered": True,
+            "reasons": reasons,
+            "raw_ai_fields": extracted_fields,
+            "recovered_field_names": recovered_field_names
+        }
         for ai_field in extracted_fields:
             field_name = ai_field.get("field_name")
             value = ai_field.get("value")
@@ -187,12 +333,36 @@ class AiExtractionService:
                 max_x = (xmax / 1000.0) * source_width
                 max_y = (ymax / 1000.0) * source_height
                 final_confidence = ai_confidence * 0.9  # slight penalty for vision-only box
-                engine = "gemini-3.1-flash-lite"
+                engine = "gemini_vision"
                 source = "vision"
                 evidence_text = str(value)
             else:
                 continue
-                
+
+            # Strict Negative Guardrail for net_quantity:
+            # Under Legal Metrology Rules, values inside nutritional information tables (like "100g", "per 100g")
+            # or serving sizes (like "4g") are NOT the declared net quantity of the package.
+            if field_name == "net_quantity":
+                is_nutrition_table = False
+                if source_ids:
+                    for s_id in source_ids:
+                        if s_id in ocr_item_map:
+                            s_text = ocr_item_map[s_id].text.lower()
+                            if any(kw in s_text for kw in ["approximate value", "serving size", "servings per", "per 100"]):
+                                is_nutrition_table = True
+                                break
+                if not is_nutrition_table:
+                    for other_item in ocr.items:
+                        other_text = other_item.text.lower()
+                        if any(kw in other_text for kw in ["nutritional information", "nutrition information", "nutrition facts", "approximate value", "servings per pack"]):
+                            dy = abs(other_item.bbox[1] - min_y)
+                            dx = abs(other_item.bbox[0] - min_x)
+                            if dy < (source_height * 0.15) and dx < (source_width * 0.4):
+                                is_nutrition_table = True
+                                break
+                if is_nutrition_table:
+                    continue
+
             synthetic_evidence = OCRTextEvidence(
                 text=evidence_text,
                 confidence=final_confidence,
@@ -200,7 +370,6 @@ class AiExtractionService:
                 engine=engine,
                 source=source,
                 source_image_id=ocr.source_image_id,
-                extraction_method="ai_fallback"
             )
             
             new_fields.append(ExtractedField(
@@ -210,6 +379,7 @@ class AiExtractionService:
                 confidence=final_confidence,
                 source_evidence=synthetic_evidence
             ))
+            recovered_field_names.append(field_name)
             
         return ExtractionResult(
             status=extraction.status,

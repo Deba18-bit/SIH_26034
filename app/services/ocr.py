@@ -110,7 +110,6 @@ class OcrService:
                     engine="paddleocr",
                     source="processed",
                     source_image_id=source_image_id,
-                    extraction_method="paddleocr_pp_ocr",
                 )
                 for detection in self._engine.extract(processed_image_path)
             ]

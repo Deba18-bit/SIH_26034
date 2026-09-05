@@ -3,6 +3,12 @@
 from app.rules.definitions import RuleDefinition
 from app.schemas.scans import ExtractionResult, ComplianceFinding, ComplianceStatus, ExtractionStatus
 
+NON_METRIC_UNITS = {
+    "oz", "ounce", "ounces", "lb", "lbs", "pound", "pounds",
+    "fl oz", "fl. oz.", "fl_oz", "gallon", "gallons", "pint", "quart"
+}
+
+
 class PresenceValidator:
     """Checks for the unambiguous presence of a required extracted field."""
     
@@ -33,6 +39,33 @@ class PresenceValidator:
                 legal_reference=rule.legal_reference,
                 evidence=[]
             )
+
+        # Domain Check 1: Non-metric units violate Rule 6(1)(c)
+        if self.required_field_name == "net_quantity":
+            for f in matching_fields:
+                if f.unit and f.unit.lower() in NON_METRIC_UNITS:
+                    return ComplianceFinding(
+                        rule_id=rule.rule_id,
+                        status=ComplianceStatus.VIOLATION,
+                        message=(
+                            f"Non-standard non-metric unit '{f.unit}' declared for net quantity. "
+                            "Legal Metrology (Packaged Commodities) Rules require metric units (g, kg, ml, l)."
+                        ),
+                        legal_reference=rule.legal_reference,
+                        evidence=matching_fields,
+                    )
+
+        # Domain Check 2: Non-positive price violates Rule 6(1)(e)
+        if self.required_field_name == "mrp":
+            for f in matching_fields:
+                if isinstance(f.value, (int, float)) and f.value <= 0.0:
+                    return ComplianceFinding(
+                        rule_id=rule.rule_id,
+                        status=ComplianceStatus.VIOLATION,
+                        message=f"Invalid MRP declared: ₹{f.value:.2f}. Retail price must be greater than zero.",
+                        legal_reference=rule.legal_reference,
+                        evidence=matching_fields,
+                    )
             
         # Check if the field extraction itself is ambiguous (e.g. multiple distinct values)
         # We can see this if matching_fields > 1 and they don't have exactly the same value

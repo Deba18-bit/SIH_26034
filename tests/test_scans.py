@@ -145,6 +145,10 @@ def test_scan_response_has_required_structure() -> None:
         "ocr",
         "extraction",
         "compliance",
+        "provenance",
+        "client_scan_id",
+        "officer_id",
+        "inspector_decision",
     }
 
 
@@ -163,7 +167,7 @@ def test_scan_response_includes_structured_ocr_evidence() -> None:
             "engine": "paddleocr",
             "source": "processed",
             "source_image_id": ocr["source_image_id"],
-            "extraction_method": "paddleocr_pp_ocr",
+            "elements": [],
         }
     ]
 
@@ -219,3 +223,33 @@ def test_processed_derivative_does_not_modify_original(scan_storage: Path) -> No
     processed_path = scan_storage / "scans" / "processed" / f"{scan_id}.png"
     assert original_path.read_bytes() == original_content
     assert processed_path.is_file()
+
+
+def test_edge_scan_provenance() -> None:
+    async def request() -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            edge_payload = {
+                "engine": "google_mlkit",
+                "source_width": 1080,
+                "source_height": 1920,
+                "items": [
+                    {
+                        "text": "MRP Rs. 250",
+                        "confidence": 0.95,
+                        "bbox": [100.0, 200.0, 400.0, 250.0]
+                    }
+                ]
+            }
+            return await client.post("/api/scans/edge", json=edge_payload)
+
+    res = asyncio.run(request())
+    assert res.status_code == 201
+    data = res.json()
+    assert "provenance" in data
+    assert data["provenance"] is not None
+    assert len(data["provenance"]["fields"]) > 0
+    mrp_field = next(f for f in data["provenance"]["fields"] if f["field_name"] == "mrp")
+    assert mrp_field["initial_ocr"]["engine"] == "google_mlkit"
+    assert mrp_field["deterministic_extraction"]["status"] == "SUCCESS"
+    assert mrp_field["evidence_merge"]["selected_value"] == "250.0"

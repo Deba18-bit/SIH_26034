@@ -15,7 +15,7 @@ def create_app() -> FastAPI:
     from fastapi.middleware.cors import CORSMiddleware
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_origins=["*"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -23,6 +23,12 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router, prefix=settings.api_prefix)
     app.include_router(scans_router, prefix=settings.api_prefix)
+
+    from fastapi.staticfiles import StaticFiles
+    scans_dir = settings.storage_dir / "scans"
+    scans_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/data/scans", StaticFiles(directory=str(scans_dir)), name="scans")
+
     return app
 
 

@@ -239,3 +239,126 @@ def test_high_confidence_evidence_remains_compliant_when_another_is_low():
     net_qty_finding = next(f for f in result.findings if f.rule_id == "LMPC-6-1-c")
     assert net_qty_finding.status == ComplianceStatus.COMPLIANT
 
+
+def test_compliance_violation_non_metric_unit():
+    """Verify that declaration in non-metric units (e.g. oz) flags an explicit VIOLATION under Rule 6(1)(c)."""
+    service = ComplianceService()
+    non_metric_qty = ExtractedField(
+        field_name="net_quantity",
+        value=12.0,
+        unit="oz",
+        confidence=0.95,
+        source_evidence=OCRTextEvidence(
+            text="Net Wt: 12 oz",
+            confidence=0.95,
+            bbox=(0, 0, 10, 10),
+            engine="paddleocr",
+            source="processed",
+            source_image_id="scan:test",
+        ),
+    )
+    extraction = ExtractionResult(
+        status=ExtractionStatus.COMPLETED,
+        fields=[
+            make_evidence("mrp", 150.0),
+            non_metric_qty,
+            make_evidence("consumer_care_phone", "1800-123-456"),
+            make_evidence("manufacturing_date", "12/2023"),
+        ],
+    )
+    result = service.evaluate(extraction)
+    assert result.status == ComplianceStatus.VIOLATION
+    qty_finding = next(f for f in result.findings if f.rule_id == "LMPC-6-1-c")
+    assert qty_finding.status == ComplianceStatus.VIOLATION
+    assert "Non-standard non-metric unit" in qty_finding.message
+    assert "Legal Metrology Officer" in qty_finding.inspector_disclaimer
+
+
+def test_compliance_violation_invalid_zero_mrp():
+    """Verify that declaring MRP as 0.0 flags an explicit VIOLATION under Rule 6(1)(e)."""
+    service = ComplianceService()
+    zero_mrp = ExtractedField(
+        field_name="mrp",
+        value=0.0,
+        confidence=0.95,
+        source_evidence=OCRTextEvidence(
+            text="MRP: 0.0",
+            confidence=0.95,
+            bbox=(0, 0, 10, 10),
+            engine="google_mlkit",
+            source="edge",
+            source_image_id="scan:test",
+        ),
+    )
+    extraction = ExtractionResult(
+        status=ExtractionStatus.COMPLETED,
+        fields=[
+            zero_mrp,
+            make_evidence("net_quantity", 500.0),
+            make_evidence("consumer_care_phone", "1800-123-456"),
+            make_evidence("manufacturing_date", "12/2023"),
+        ],
+    )
+    result = service.evaluate(extraction)
+    assert result.status == ComplianceStatus.VIOLATION
+    mrp_finding = next(f for f in result.findings if f.rule_id == "LMPC-6-1-e")
+    assert mrp_finding.status == ComplianceStatus.VIOLATION
+    assert "must be greater than zero" in mrp_finding.message
+
+
+def test_compliance_three_way_distinction():
+    """Verify clean distinction among COMPLIANT, VIOLATION, and MANUAL_REVIEW_REQUIRED."""
+    service = ComplianceService()
+    
+    # 1. Fully compliant case
+    compliant_extraction = ExtractionResult(
+        status=ExtractionStatus.COMPLETED,
+        fields=[
+            make_evidence("mrp", 299.0),
+            make_evidence("net_quantity", 500.0),
+            make_evidence("consumer_care_phone", "9876543210"),
+            make_evidence("manufacturing_date", "01/2024"),
+        ],
+    )
+    res_compliant = service.evaluate(compliant_extraction)
+    assert res_compliant.status == ComplianceStatus.COMPLIANT
+
+    # 2. Violation case (prohibited pound unit)
+    violation_qty = ExtractedField(
+        field_name="net_quantity",
+        value=2.0,
+        unit="lbs",
+        confidence=0.95,
+        source_evidence=OCRTextEvidence(
+            text="Net Wt: 2 lbs",
+            confidence=0.95,
+            bbox=(0, 0, 10, 10),
+            engine="google_mlkit",
+            source="edge",
+            source_image_id="scan:test",
+        ),
+    )
+    violation_extraction = ExtractionResult(
+        status=ExtractionStatus.COMPLETED,
+        fields=[
+            make_evidence("mrp", 299.0),
+            violation_qty,
+            make_evidence("consumer_care_phone", "9876543210"),
+            make_evidence("manufacturing_date", "01/2024"),
+        ],
+    )
+    res_violation = service.evaluate(violation_extraction)
+    assert res_violation.status == ComplianceStatus.VIOLATION
+
+    # 3. Missing evidence case (requires inspector review)
+    missing_extraction = ExtractionResult(
+        status=ExtractionStatus.COMPLETED,
+        fields=[
+            make_evidence("mrp", 299.0),
+            make_evidence("net_quantity", 500.0),
+            # Missing consumer care & date
+        ],
+    )
+    res_missing = service.evaluate(missing_extraction)
+    assert res_missing.status == ComplianceStatus.MANUAL_REVIEW_REQUIRED
+

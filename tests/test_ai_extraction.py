@@ -18,8 +18,7 @@ def make_evidence(text: str, confidence: float, bbox: tuple = (0, 0, 10, 10)) ->
         bbox=bbox,
         engine="paddleocr",
         source="processed",
-        source_image_id="scan:test",
-        extraction_method="paddleocr_pp_ocr"
+        source_image_id="scan:test"
     )
 
 def make_extracted_field(field_name: str, value: str, text: str) -> ExtractedField:
@@ -102,7 +101,7 @@ async def test_ai_called_when_field_missing():
     # Check the newly added AI field
     mrp_field = next(f for f in result.fields if f.field_name == "mrp")
     assert mrp_field.value == 150.0
-    assert mrp_field.source_evidence.extraction_method == "ai_fallback"
+    assert mrp_field.source_evidence.engine == "paddleocr"
     assert mrp_field.source_evidence.text == "MRP 150.00"
     assert mrp_field.source_evidence.bbox == (0, 0, 20, 10)
     assert mrp_field.confidence == 0.90 # min(0.90, min(0.99, 0.95))
@@ -174,3 +173,39 @@ def test_gemini_provider_init():
         
     provider = GeminiAiProvider(api_key="test-key")
     assert provider.client is not None
+
+
+@pytest.mark.anyio
+async def test_ai_rejects_nutrition_table_for_net_quantity():
+    """Verify that AI results referencing nutrition facts (e.g. 100g) are rejected as net_quantity."""
+    stub_response = {
+        "extracted_fields": [
+            {
+                "field_name": "net_quantity",
+                "value": "100",
+                "unit": "g",
+                "source_ocr_ids": [1],
+                "ai_semantic_confidence": 0.95
+            }
+        ]
+    }
+    provider = FakeAiProvider(stub_response)
+    service = AiExtractionService(provider=provider)
+
+    extraction = ExtractionResult(status=ExtractionStatus.COMPLETED, fields=[])
+    ocr = OCRResult(
+        status=OcrStatus.COMPLETED,
+        items=[
+            make_evidence("Nutritional Information", 0.95), # Item 0
+            make_evidence("Approximate Value: 100g", 0.95), # Item 1 (nutrition reference)
+        ],
+        source_image_id="test",
+        source_width=1000,
+        source_height=1000
+    )
+
+    result = await service.enrich(ocr, extraction)
+    net_qty_fields = [f for f in result.fields if f.field_name == "net_quantity"]
+    # Nutrition table value must NOT be merged as package net quantity
+    assert len(net_qty_fields) == 0
+
