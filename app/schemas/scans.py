@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ScanStatus(str, Enum):
@@ -105,21 +105,24 @@ class EdgeOcrElement(BaseModel):
 
 class EdgeOcrItem(BaseModel):
     """One text line or block recognized natively on the mobile device."""
+    model_config = ConfigDict(extra="ignore")
     text: str
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(default=0.95, ge=0.0, le=1.0)
     bbox: tuple[float, float, float, float]
     elements: list[EdgeOcrElement] = Field(default_factory=list)
 
 class EdgeScanRequest(BaseModel):
     """A lightweight scan request from a mobile device without an image."""
-    engine: OCREngine
-    source_width: int
-    source_height: int
-    items: list[EdgeOcrItem]
+    model_config = ConfigDict(extra="ignore")
+    engine: OCREngine = OCREngine.GOOGLE_MLKIT
+    source_width: int = 1920
+    source_height: int = 1080
+    items: list[EdgeOcrItem] = Field(default_factory=list)
     client_scan_id: str | None = None
     officer_id: str = "OFFICER-DEFAULT"
     is_offline_sync: bool = False
     client_timestamp: str | None = None
+    sync_source: str | None = None
 
 
 class OCRTextEvidence(BaseModel):

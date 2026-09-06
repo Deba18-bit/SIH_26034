@@ -144,18 +144,38 @@ class ScanService:
         created_at = datetime.now(timezone.utc)
         
         # 1. Map Edge request to normalized OCRResult schema
-        items = [
-            OCRTextEvidence(
-                text=item.text,
-                confidence=item.confidence,
-                bbox=item.bbox,
-                engine=request.engine,
-                source=OCRSource.EDGE,
-                source_image_id=f"scan:{scan_id}:edge",
-                elements=item.elements
+        items = []
+        for item in request.items:
+            left, top, right, bottom = item.bbox
+            if right <= left:
+                right = left + 1.0
+            if bottom <= top:
+                bottom = top + 1.0
+            clean_elements = []
+            for el in item.elements:
+                e_left, e_top, e_right, e_bottom = el.bbox
+                if e_right <= e_left:
+                    e_right = e_left + 1.0
+                if e_bottom <= e_top:
+                    e_bottom = e_top + 1.0
+                clean_elements.append(
+                    EdgeOcrElement(
+                        text=el.text,
+                        confidence=max(0.0, min(1.0, float(el.confidence))),
+                        bbox=(e_left, e_top, e_right, e_bottom),
+                    )
+                )
+            items.append(
+                OCRTextEvidence(
+                    text=item.text,
+                    confidence=max(0.0, min(1.0, float(item.confidence))),
+                    bbox=(left, top, right, bottom),
+                    engine=request.engine,
+                    source=OCRSource.EDGE,
+                    source_image_id=f"scan:{scan_id}:edge",
+                    elements=clean_elements,
+                )
             )
-            for item in request.items
-        ]
         
         ocr = OCRResult(
             status=OcrStatus.COMPLETED if items else OcrStatus.NO_TEXT,
