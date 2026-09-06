@@ -19,7 +19,7 @@ from app.core.config import Settings
 from app.schemas.history import ScanHistoryResponse, ScanStatsResponse, ScanSummaryItem
 from app.schemas.scans import (
     ScanCreateResponse, ScanStatus, OCRResult, ExtractionResult, ExtractedField,
-    ComplianceResult, EdgeScanRequest, OCRTextEvidence, OcrStatus, OCRSource, OCREngine,
+    ComplianceResult, EdgeScanRequest, EdgeOcrElement, OCRTextEvidence, OcrStatus, OCRSource, OCREngine,
     InspectorDecisionRequest
 )
 from app.services.image_preprocessing import ImagePreprocessingService, ProcessedImage
