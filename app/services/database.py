@@ -104,6 +104,10 @@ class DatabaseService:
                             ALTER TABLE scans ADD COLUMN IF NOT EXISTS identification_method TEXT NOT NULL DEFAULT 'DETERMINISTIC';
                             ALTER TABLE scans ADD COLUMN IF NOT EXISTS identification_confidence REAL NOT NULL DEFAULT 0.0;
                             ALTER TABLE scans ADD COLUMN IF NOT EXISTS identification_evidence JSONB DEFAULT '[]'::jsonb;
+                            ALTER TABLE scans ADD COLUMN IF NOT EXISTS inspector_decision TEXT;
+                            ALTER TABLE scans ADD COLUMN IF NOT EXISTS inspector_notes TEXT;
+                            ALTER TABLE scans ADD COLUMN IF NOT EXISTS inspector_decided_at TIMESTAMPTZ;
+                            ALTER TABLE scans ADD COLUMN IF NOT EXISTS inspector_id TEXT;
                             CREATE INDEX IF NOT EXISTS idx_scans_created_at ON scans (created_at DESC);
                             CREATE INDEX IF NOT EXISTS idx_scans_status ON scans (status);
                             CREATE INDEX IF NOT EXISTS idx_scans_client_id ON scans (client_scan_id);
@@ -111,6 +115,7 @@ class DatabaseService:
                             CREATE INDEX IF NOT EXISTS idx_scans_brand ON scans (brand_name);
                             CREATE INDEX IF NOT EXISTS idx_scans_id_status ON scans (identification_status);
                             CREATE INDEX IF NOT EXISTS idx_scans_manufacturer ON scans (manufacturer_name);
+                            CREATE INDEX IF NOT EXISTS idx_scans_inspector_decision ON scans (inspector_decision);
                         """)
                     conn.commit()
                 self._backfill_legacy_states_pg()
@@ -162,6 +167,10 @@ class DatabaseService:
                 ("identification_method", "TEXT NOT NULL DEFAULT 'DETERMINISTIC'"),
                 ("identification_confidence", "REAL NOT NULL DEFAULT 0.0"),
                 ("identification_evidence", "TEXT NOT NULL DEFAULT '[]'"),
+                ("inspector_decision", "TEXT"),
+                ("inspector_notes", "TEXT"),
+                ("inspector_decided_at", "TEXT"),
+                ("inspector_id", "TEXT"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE scans ADD COLUMN {col} {col_def}")
@@ -172,6 +181,7 @@ class DatabaseService:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_scans_client_id ON scans (client_scan_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_scans_officer_id ON scans (officer_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_scans_id_status ON scans (identification_status)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_scans_inspector_decision ON scans (inspector_decision)")
             conn.commit()
 
         self._backfill_legacy_states_sqlite()
@@ -296,6 +306,12 @@ class DatabaseService:
         else:
             status_str = scan_response.status.value if hasattr(scan_response.status, "value") else str(scan_response.status)
 
+        insp_dec = scan_response.inspector_decision
+        insp_decision_val = insp_dec.decision.value if insp_dec else None
+        insp_notes_val = insp_dec.notes if insp_dec else None
+        insp_decided_at_val = insp_dec.decided_at if insp_dec else None
+        insp_officer_id_val = insp_dec.officer_id if insp_dec else None
+
         cur.execute(
             """
             INSERT INTO scans (
@@ -305,8 +321,9 @@ class DatabaseService:
                 product_name, brand_name, manufacturer_name,
                 identification_status, identification_method, identification_confidence, identification_evidence,
                 ocr_items_count, compliant_rules_count, review_rules_count, violation_rules_count,
-                ocr_data, extraction_data, compliance_data, provenance_data
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ocr_data, extraction_data, compliance_data, provenance_data,
+                inspector_decision, inspector_notes, inspector_decided_at, inspector_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (scan_id) DO UPDATE SET
                 status = EXCLUDED.status,
                 updated_at = EXCLUDED.updated_at,
@@ -327,7 +344,11 @@ class DatabaseService:
                 ocr_data = EXCLUDED.ocr_data,
                 extraction_data = EXCLUDED.extraction_data,
                 compliance_data = EXCLUDED.compliance_data,
-                provenance_data = EXCLUDED.provenance_data
+                provenance_data = EXCLUDED.provenance_data,
+                inspector_decision = COALESCE(EXCLUDED.inspector_decision, scans.inspector_decision),
+                inspector_notes = COALESCE(EXCLUDED.inspector_notes, scans.inspector_notes),
+                inspector_decided_at = COALESCE(EXCLUDED.inspector_decided_at, scans.inspector_decided_at),
+                inspector_id = COALESCE(EXCLUDED.inspector_id, scans.inspector_id)
             """,
             (
                 scan_response.scan_id,
@@ -359,6 +380,10 @@ class DatabaseService:
                 Jsonb(scan_response.extraction.model_dump()),
                 Jsonb(scan_response.compliance.model_dump()),
                 Jsonb(scan_response.provenance.model_dump()) if scan_response.provenance else None,
+                insp_decision_val,
+                insp_notes_val,
+                insp_decided_at_val,
+                insp_officer_id_val,
             ),
         )
 
@@ -383,6 +408,12 @@ class DatabaseService:
         else:
             status_str = scan_response.status.value if hasattr(scan_response.status, "value") else str(scan_response.status)
 
+        insp_dec = scan_response.inspector_decision
+        insp_decision_val = insp_dec.decision.value if insp_dec else None
+        insp_notes_val = insp_dec.notes if insp_dec else None
+        insp_decided_at_val = insp_dec.decided_at.isoformat() if insp_dec else None
+        insp_officer_id_val = insp_dec.officer_id if insp_dec else None
+
         conn.execute(
             """
             INSERT OR REPLACE INTO scans (
@@ -392,8 +423,9 @@ class DatabaseService:
                 product_name, brand_name, manufacturer_name,
                 identification_status, identification_method, identification_confidence, identification_evidence,
                 ocr_items_count, compliant_rules_count, review_rules_count, violation_rules_count,
-                ocr_data, extraction_data, compliance_data, provenance_data
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ocr_data, extraction_data, compliance_data, provenance_data,
+                inspector_decision, inspector_notes, inspector_decided_at, inspector_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 scan_response.scan_id,
@@ -425,6 +457,10 @@ class DatabaseService:
                 scan_response.extraction.model_dump_json(),
                 scan_response.compliance.model_dump_json(),
                 scan_response.provenance.model_dump_json() if scan_response.provenance else None,
+                insp_decision_val,
+                insp_notes_val,
+                insp_decided_at_val,
+                insp_officer_id_val,
             ),
         )
 
@@ -549,6 +585,16 @@ class DatabaseService:
             compliant_rules_count=int(row.get("compliant_rules_count") or 0),
             review_rules_count=int(row.get("review_rules_count") or 0),
             violation_rules_count=int(row.get("violation_rules_count") or 0),
+            inspector_decision=row.get("inspector_decision"),
+            inspector_notes=row.get("inspector_notes"),
+            inspector_decided_at=(
+                datetime.fromisoformat(row["inspector_decided_at"].replace("Z", "+00:00"))
+                if isinstance(row.get("inspector_decided_at"), str)
+                else row.get("inspector_decided_at")
+                if isinstance(row.get("inspector_decided_at"), datetime)
+                else None
+            ),
+            inspector_id=row.get("inspector_id"),
         )
 
     def get_scan_summary(self, scan_id: str) -> ScanSummaryItem | None:
@@ -716,6 +762,159 @@ class DatabaseService:
             conn.commit()
             row = conn.execute("SELECT * FROM scans WHERE scan_id = ?", (scan_id,)).fetchone()
             return self._sqlite_row_to_dict(row) if row else None
+
+    def apply_inspector_decision(
+        self,
+        scan_id: str,
+        decision: str,
+        officer_id: str = "OFFICER-DEFAULT",
+        notes: str | None = None,
+    ) -> ScanSummaryItem:
+        """Apply an authoritative enforcement decision (compliant/violation) by an inspector."""
+        normalized_decision = decision.lower()
+        if normalized_decision not in ("compliant", "violation"):
+            raise ValueError(f"Invalid decision '{decision}'. Must be 'compliant' or 'violation'.")
+
+        now = datetime.now(timezone.utc)
+
+        # 1. Update State File on Disk (if exists)
+        state_file = self._settings.storage_dir / "scans" / "states" / f"{scan_id}.json"
+        compliance_dict = None
+        if state_file.exists():
+            try:
+                data = json.loads(state_file.read_text("utf-8"))
+                data["status"] = normalized_decision
+                if "compliance" in data and isinstance(data["compliance"], dict):
+                    data["compliance"]["status"] = normalized_decision
+                    for finding in data["compliance"].get("findings", []):
+                        cur_status = str(finding.get("status", "")).lower()
+                        if cur_status in ("manual_review_required", "review"):
+                            finding["status"] = normalized_decision
+                            finding_note = f"[Inspector Confirmed {normalized_decision.capitalize()}]: {notes}" if notes else f"[Inspector Confirmed {normalized_decision.capitalize()}]"
+                            finding["message"] = f"{finding_note} - {finding.get('message', '')}"
+                data["inspector_decision"] = {
+                    "decision": normalized_decision,
+                    "officer_id": officer_id,
+                    "notes": notes,
+                    "decided_at": now.isoformat(),
+                }
+                state_file.write_text(json.dumps(data, indent=2), "utf-8")
+                compliance_dict = data.get("compliance")
+            except Exception as e:
+                logger.warning("Could not update scan state file %s: %s", state_file, e)
+
+        # 2. Get current counts to adjust
+        current_row = self.get_scan(scan_id)
+        if not current_row:
+            raise ValueError(f"Scan {scan_id} not found.")
+
+        compliant_count = int(current_row.get("compliant_rules_count") or 0)
+        review_count = int(current_row.get("review_rules_count") or 0)
+        violation_count = int(current_row.get("violation_rules_count") or 0)
+
+        if normalized_decision == "compliant":
+            compliant_count += review_count
+            review_count = 0
+        else:
+            violation_count += review_count
+            review_count = 0
+
+        # If compliance_dict wasn't read from state_file, update existing compliance_data
+        if not compliance_dict and current_row.get("compliance_data"):
+            comp_data = current_row["compliance_data"]
+            if isinstance(comp_data, str):
+                try:
+                    comp_data = json.loads(comp_data)
+                except Exception:
+                    comp_data = {}
+            if isinstance(comp_data, dict):
+                comp_data["status"] = normalized_decision
+                for finding in comp_data.get("findings", []):
+                    cur_status = str(finding.get("status", "")).lower()
+                    if cur_status in ("manual_review_required", "review"):
+                        finding["status"] = normalized_decision
+                        finding_note = f"[Inspector Confirmed {normalized_decision.capitalize()}]: {notes}" if notes else f"[Inspector Confirmed {normalized_decision.capitalize()}]"
+                        finding["message"] = f"{finding_note} - {finding.get('message', '')}"
+                compliance_dict = comp_data
+
+        # 3. Update Database (Postgres or SQLite)
+        if self._is_postgres:
+            try:
+                with self._get_pg_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            UPDATE scans SET
+                                status = %s,
+                                compliant_rules_count = %s,
+                                review_rules_count = %s,
+                                violation_rules_count = %s,
+                                inspector_decision = %s,
+                                inspector_notes = %s,
+                                inspector_decided_at = %s,
+                                inspector_id = %s,
+                                compliance_data = COALESCE(%s, compliance_data),
+                                updated_at = %s
+                            WHERE scan_id = %s
+                            RETURNING *
+                            """,
+                            (
+                                normalized_decision,
+                                compliant_count,
+                                review_count,
+                                violation_count,
+                                normalized_decision,
+                                notes,
+                                now,
+                                officer_id,
+                                Jsonb(compliance_dict) if compliance_dict else None,
+                                now,
+                                scan_id,
+                            ),
+                        )
+                        row = cur.fetchone()
+                        conn.commit()
+                        if row:
+                            return self._row_to_scan_summary_item(row)
+            except Exception as e:
+                logger.warning("Postgres apply_inspector_decision failed: %s", e)
+
+        # Fallback to SQLite
+        with self._get_sqlite_connection() as conn:
+            conn.execute(
+                """
+                UPDATE scans SET
+                    status = ?,
+                    compliant_rules_count = ?,
+                    review_rules_count = ?,
+                    violation_rules_count = ?,
+                    inspector_decision = ?,
+                    inspector_notes = ?,
+                    inspector_decided_at = ?,
+                    inspector_id = ?,
+                    compliance_data = COALESCE(?, compliance_data),
+                    updated_at = ?
+                WHERE scan_id = ?
+                """,
+                (
+                    normalized_decision,
+                    compliant_count,
+                    review_count,
+                    violation_count,
+                    normalized_decision,
+                    notes,
+                    now.isoformat(),
+                    officer_id,
+                    json.dumps(compliance_dict) if compliance_dict else None,
+                    now.isoformat(),
+                    scan_id,
+                ),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM scans WHERE scan_id = ?", (scan_id,)).fetchone()
+            if not row:
+                raise ValueError(f"Scan {scan_id} not found in database.")
+            return self._row_to_scan_summary_item(row)
 
     def get_stats(self) -> ScanStatsResponse:
         """Compute aggregate metrics across all recorded scans."""
