@@ -77,7 +77,7 @@ def _make_dummy_scan_response(
 def test_database_save_and_retrieve() -> None:
     """A scan record can be saved and retrieved with all fields intact."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        settings = Settings(storage_dir=Path(tmpdir))
+        settings = Settings(storage_dir=Path(tmpdir), database_url="sqlite:///:memory:")
         db = DatabaseService(settings)
 
         scan_id = str(uuid4())
@@ -103,7 +103,7 @@ def test_database_save_and_retrieve() -> None:
 def test_database_list_and_stats() -> None:
     """Listing scans supports filtering and stats report aggregates accurately."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        settings = Settings(storage_dir=Path(tmpdir))
+        settings = Settings(storage_dir=Path(tmpdir), database_url="sqlite:///:memory:")
         db = DatabaseService(settings)
 
         s1 = str(uuid4())
@@ -127,8 +127,11 @@ def test_database_list_and_stats() -> None:
         assert filtered.items[0].scan_id == s1
 
 
-def test_api_history_and_stats_endpoints() -> None:
+def test_api_history_and_stats_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
     """The FastAPI app exposes /api/scans/history, /stats, and /{scan_id}."""
+    from app.core.config import get_settings
+    get_settings.cache_clear()
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
     app = create_app()
     client = TestClient(app)
 
